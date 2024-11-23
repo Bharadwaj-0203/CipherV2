@@ -1,0 +1,591 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Cipher Chat - Secure Private Messaging</title>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+    <style>
+        /* General and existing styles */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Roboto', sans-serif;
+            background-color: #1a1a1a;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            color: #ffffff;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 20px auto;
+            background: #2b2b2b;
+            border-radius: 15px;
+            box-shadow: 0 4px 30px rgba(255, 0, 0, 0.1);
+            flex-grow: 1;
+            display: flex;
+            flex-direction: column;
+            height: calc(100vh - 40px);
+            border: 1px solid #ff000033;
+        }
+
+        .chat-header {
+            padding: 20px;
+            background: linear-gradient(135deg, #831010, #4a0404);
+            border-radius: 15px 15px 0 0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 2px solid #ff000033;
+        }
+
+        .chat-header h2 {
+            font-family: 'Share Tech Mono', monospace;
+            color: #ffffff;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .chat-header h2::before {
+            content: "🔒";
+            font-size: 24px;
+        }
+
+        .chat-container {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+        }
+
+        .users-sidebar {
+            width: 250px;
+            background: #333333;
+            border-right: 1px solid #ff000033;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .users-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 10px;
+        }
+
+        .user-item {
+            padding: 10px 15px;
+            margin: 5px 0;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            background: #2b2b2b;
+            border: 1px solid transparent;
+        }
+
+        .user-item:hover {
+            background: #3d3d3d;
+            border-color: #ff000033;
+        }
+
+        .user-item.active {
+            background: linear-gradient(135deg, #ff363644, #ff000044);
+            border-color: #ff0000;
+        }
+
+        .user-item::before {
+            content: "●";
+            color: #00ff00;
+            font-size: 12px;
+        }
+
+        .chat-main {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            background: #2b2b2b;
+        }
+
+        .selected-user {
+            padding: 15px 20px;
+            background: #333333;
+            border-bottom: 1px solid #ff000033;
+            font-family: 'Share Tech Mono', monospace;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .selected-user::before {
+            content: "🔒";
+        }
+
+        .no-chat-selected {
+            display: flex;
+            flex: 1;
+            justify-content: center;
+            align-items: center;
+            font-family: 'Share Tech Mono', monospace;
+            color: #666;
+            font-size: 1.2em;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .no-chat-selected::before {
+            content: "🔒";
+            font-size: 3em;
+        }
+
+        #messageArea {
+            flex-grow: 1;
+            padding: 20px;
+            overflow-y: auto;
+            background: #2b2b2b;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .message {
+            margin-bottom: 15px;
+            max-width: 70%;
+            clear: both;
+            animation: fadeIn 0.3s ease-in;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .message.sent {
+            float: right;
+            align-self: flex-end;
+        }
+
+        .message.received {
+            float: left;
+            align-self: flex-start;
+        }
+
+        .message-content {
+            padding: 12px 18px;
+            border-radius: 15px;
+            position: relative;
+            display: inline-block;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+
+        .message.sent .message-content {
+            background: linear-gradient(135deg, #ff3636, #ff0000);
+            color: white;
+            border-bottom-right-radius: 5px;
+        }
+
+        .message.received .message-content {
+            background: #3d3d3d;
+            color: #ffffff;
+            border-bottom-left-radius: 5px;
+            border: 1px solid #ff000033;
+        }
+
+        .message-meta {
+            font-size: 12px;
+            color: #888;
+            margin-top: 5px;
+            font-family: 'Share Tech Mono', monospace;
+        }
+
+        .message.sent .message-meta {
+            text-align: right;
+        }
+
+        .input-area {
+            padding: 20px;
+            background: #333333;
+            border-top: 1px solid #ff000033;
+            border-radius: 0 0 15px 15px;
+        }
+
+        .input-container {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        input {
+            flex-grow: 1;
+            padding: 12px 20px;
+            border: 1px solid #ff000033;
+            border-radius: 25px;
+            outline: none;
+            font-size: 14px;
+            background: #2b2b2b;
+            color: #ffffff;
+            font-family: 'Roboto', sans-serif;
+        }
+
+        input:focus {
+            border-color: #ff0000;
+            box-shadow: 0 0 10px rgba(255,0,0,0.1);
+        }
+
+        button {
+            padding: 12px 24px;
+            background: linear-gradient(135deg, #ff3636, #ff0000);
+            color: white;
+            border: none;
+            border-radius: 25px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            font-family: 'Roboto', sans-serif;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        button:hover {
+            background: linear-gradient(135deg, #ff0000, #cc0000);
+            transform: translateY(-1px);
+            box-shadow: 0 4px 15px rgba(255,0,0,0.2);
+        }
+
+        .emoji-picker {
+            padding: 8px 12px;
+            background: #2b2b2b;
+            border: 1px solid #ff000033;
+            border-radius: 20px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .emoji-picker:hover {
+            background: #333333;
+            transform: scale(1.1);
+        }
+
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: #2b2b2b;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #ff0000;
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: #cc0000;
+        }
+
+        .typing-indicator {
+            color: #ff6b6b;
+            font-style: italic;
+            height: 20px;
+            font-size: 14px;
+            font-family: 'Share Tech Mono', monospace;
+        }
+    </style>
+</head>
+<body>
+    <div class="encryption-indicator">🔒 END-TO-END ENCRYPTED</div>
+    <div class="container">
+        <div class="chat-header">
+            <h2>CIPHER CHAT SECURE MESSAGING</h2>
+            <span class="connection-status"></span>
+        </div>
+
+        <div class="connection-form">
+            <input type="text" id="tokenInput" placeholder="Enter your secure JWT token">
+            <button onclick="connectWebSocket()">SECURE CONNECT</button>
+        </div>
+
+        <div class="chat-container">
+            <div class="users-sidebar">
+                <div class="status-area">
+                    <div class="online-users">ACTIVE                     AGENTS: <span id="onlineUsers">0</span></div>
+                </div>
+                <div class="users-list" id="usersList"></div>
+            </div>
+
+            <div class="chat-main">
+                <div class="selected-user" id="selectedUser">Select a user to start secure chat</div>
+                <div id="messageArea">
+                    <div class="no-chat-selected">
+                        <span>SELECT AN AGENT TO START SECURE CHAT</span>
+                    </div>
+                </div>
+                <div class="input-area">
+                    <div class="input-container">
+                        <span class="emoji-picker" onclick="toggleEmoji()">😊</span>
+                        <input type="text" id="messageInput" placeholder="Type your encrypted message..." onkeyup="handleTyping(event)" disabled>
+                        <button onclick="sendMessage()" disabled id="sendButton">SEND SECURE</button>
+                    </div>
+                    <div class="typing-indicator" id="typingIndicator"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let ws;
+        let token;
+        let typingTimeout;
+        let currentUserId = null;
+        let selectedUser = null;
+        let currentUsername = null;
+        const messageHistory = new Map();
+        let lastTypingStatus = false;
+    
+        function connectWebSocket() {
+            token = document.getElementById('tokenInput').value;
+            ws = new WebSocket('ws://localhost:3000');
+    
+            ws.onopen = () => {
+                addStatusMessage('Connected to chat');
+                ws.send(JSON.stringify({
+                    type: 'auth',
+                    token: token
+                }));
+            };
+    
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                console.log('Received:', data);
+                handleMessage(data);
+            };
+    
+            ws.onclose = () => {
+                addStatusMessage('Disconnected from chat');
+                document.getElementById('onlineUsers').textContent = '0';
+                document.getElementById('typingIndicator').textContent = '';
+            };
+    
+            ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+                addStatusMessage('Connection error');
+            };
+        }
+    
+        function handleMessage(data) {
+            switch(data.type) {
+                case 'user_list':
+                    updateUsersList(data.users);
+                    if (!currentUserId) {
+                        // Extract currentUserId from the token
+                        const tokenData = parseJwt(token);
+                        currentUserId = tokenData.id;
+                        // Find current user in the list
+                        const currentUser = data.users.find(u => u.id === currentUserId);
+                        if (currentUser) {
+                            currentUsername = currentUser.username;
+                        }
+                    }
+                    break;
+                case 'private_message':
+                    console.log('Received private message:', data);
+                    addMessageToChat(data);
+                    break;
+                case 'typing':
+                    if (selectedUser && data.userId === selectedUser.id) {
+                        updateTypingIndicator(data);
+                    }
+                    break;
+                case 'error':
+                    console.error('Server error:', data.message);
+                    addStatusMessage('Error: ' + data.message);
+                    break;
+            }
+        }
+    
+        function parseJwt(token) {
+            try {
+                const base64Url = token.split('.')[1];
+                const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+                return JSON.parse(window.atob(base64));
+            } catch (e) {
+                return null;
+            }
+        }
+    
+        function updateUsersList(users) {
+            const usersList = document.getElementById('usersList');
+            const currentUsers = users.filter(user => user.id !== currentUserId);
+            
+            const onlineCount = currentUsers.filter(user => user.isOnline).length;
+            document.getElementById('onlineUsers').textContent = onlineCount;
+    
+            usersList.innerHTML = currentUsers.map(user => `
+                <div class="user-item ${selectedUser?.id === user.id ? 'active' : ''}" 
+                     onclick="selectUser('${user.id}', '${user.username}')"
+                     style="opacity: ${user.isOnline ? '1' : '0.5'}">
+                    ${user.username}
+                    <span style="color: ${user.isOnline ? '#00ff00' : '#ff0000'}">●</span>
+                </div>
+            `).join('');
+        }
+    
+        function selectUser(userId, username) {
+            selectedUser = { id: userId, username };
+            document.getElementById('selectedUser').textContent = `Secure Chat with ${username}`;
+            document.getElementById('messageInput').disabled = false;
+            document.getElementById('sendButton').disabled = false;
+            
+            displayMessageHistory(userId);
+            
+            const userItems = document.querySelectorAll('.user-item');
+            userItems.forEach(item => {
+                item.classList.remove('active');
+                if (item.textContent.includes(username)) {
+                    item.classList.add('active');
+                }
+            });
+    
+            // Clear typing indicator when switching chats
+            document.getElementById('typingIndicator').textContent = '';
+        }
+    
+        function sendMessage() {
+            if (!ws || ws.readyState !== WebSocket.OPEN || !selectedUser) {
+                return;
+            }
+    
+            const messageInput = document.getElementById('messageInput');
+            const content = messageInput.value.trim();
+            
+            if (content) {
+                const messageData = {
+                    type: 'message',
+                    content: content,
+                    recipientId: selectedUser.id,
+                    token: token
+                };
+                
+                console.log('Sending message:', messageData);
+                ws.send(JSON.stringify(messageData));
+                messageInput.value = '';
+                lastTypingStatus = false;
+                sendTypingStatus(false);
+            }
+        }
+    
+        function handleTyping(event) {
+            if (!ws || ws.readyState !== WebSocket.OPEN || !selectedUser) return;
+    
+            clearTimeout(typingTimeout);
+            
+            if (!lastTypingStatus) {
+                sendTypingStatus(true);
+                lastTypingStatus = true;
+            }
+    
+            typingTimeout = setTimeout(() => {
+                sendTypingStatus(false);
+                lastTypingStatus = false;
+            }, 1000);
+    
+            if (event.key === 'Enter') {
+                sendMessage();
+            }
+        }
+    
+        function sendTypingStatus(isTyping) {
+            if (!selectedUser) return;
+            
+            ws.send(JSON.stringify({
+                type: 'typing',
+                isTyping: isTyping,
+                recipientId: selectedUser.id,
+                token: token
+            }));
+        }
+    
+        function addMessageToChat(data) {
+            console.log('Adding message to chat:', data);
+            
+            let chatPartnerId;
+            if (data.sender === currentUserId) {
+                chatPartnerId = data.recipient;
+            } else {
+                chatPartnerId = data.sender;
+            }
+    
+            // Initialize message history for this chat if it doesn't exist
+            if (!messageHistory.has(chatPartnerId)) {
+                messageHistory.set(chatPartnerId, []);
+            }
+    
+            // Add message to history
+            messageHistory.get(chatPartnerId).push({
+                content: data.content,
+                sender: data.sender,
+                timestamp: data.timestamp,
+                senderName: data.senderName
+            });
+    
+            // If this is the currently selected chat, display the updated history
+            if (selectedUser && chatPartnerId === selectedUser.id) {
+                displayMessageHistory(selectedUser.id);
+            }
+        }
+    
+        function displayMessageHistory(userId) {
+            const messageArea = document.getElementById('messageArea');
+            messageArea.innerHTML = '';
+    
+            const messages = messageHistory.get(userId) || [];
+            
+            if (messages.length === 0) {
+                messageArea.innerHTML = '<div class="status-message">No messages yet</div>';
+                return;
+            }
+    
+            messages.forEach(data => {
+                const messageDiv = document.createElement('div');
+                const isSent = data.sender === currentUserId;
+                
+                messageDiv.className = `message ${isSent ? 'sent' : 'received'}`;
+                messageDiv.innerHTML = `
+                    <div class="message-content">
+                        ${data.content}
+                    </div>
+                    <div class="message-meta">
+                        ${new Date(data.timestamp).toLocaleTimeString()}
+                    </div>
+                `;
+                
+                messageArea.appendChild(messageDiv);
+            });
+    
+            messageArea.scrollTop = messageArea.scrollHeight;
+        }
+    
+        function updateTypingIndicator(data) {
+            const indicator = document.getElementById('typingIndicator');
+            if (data.userId !== currentUserId) { // Only show typing indicator for other users
+                indicator.textContent = data.isTyping ? `${data.username} is typing...` : '';
+            }
+        }
+    
+        function addStatusMessage(message) {
+            const messageArea = document.getElementById('messageArea');
+            const statusDiv = document.createElement('div');
+            statusDiv.className = 'status-message';
+            statusDiv.textContent = message;
+            messageArea.appendChild(statusDiv);
+            messageArea.scrollTop = messageArea.scrollHeight;
+        }
+    </script>
+</body>
+</html>
