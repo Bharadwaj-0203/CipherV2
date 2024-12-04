@@ -1,140 +1,162 @@
-// server/src/controllers/authController.js
 const User = require('../models/User');
 const jwt = require('jsonwebtoken');
-const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
+const crypto = require('crypto');
 
-const generateKeyPair = () => {
-  return crypto.generateKeyPairSync('rsa', {
-    modulusLength: 2048,
-    publicKeyEncoding: {
-      type: 'spki',
-      format: 'pem'
-    },
-    privateKeyEncoding: {
-      type: 'pkcs8',
-      format: 'pem'
-    }
-  });
-};
+const generateDHKeys = () => {
+  try {
+    const ecdh = crypto.createECDH('prime256v1');
+    ecdh.generateKeys();
 
-const hashPassword = async (password) => {
-  const salt = await bcrypt.genSalt(12);
-  const hash = await bcrypt.hash(password, salt);
-  return { hash, salt };
-};
-
-const authController = {
-  register: async (req, res) => {
-    try {
-      console.log('Registration attempt:', req.body);
-      const { username, password } = req.body;
-
-      const existingUser = await User.findOne({ username });
-      if (existingUser) {
-        return res.status(400).json({
-          success: false,
-          message: 'Username is already taken'
-        });
-      }
-
-      // Generate RSA keypair
-      const { publicKey, privateKey } = generateKeyPair();
-      
-      // Hash password with bcrypt
-      const { hash, salt } = await hashPassword(password);
-
-      // Create new user
-      const user = new User({
-        username,
-        password: hash,
-        salt,
-        publicKey,
-        privateKey
-      });
-
-      await user.save();
-      console.log('User created successfully:', username);
-
-      // Create token
-      const token = jwt.sign(
-        { id: user._id },
-        process.env.JWT_SECRET,
-        { expiresIn: '24h' }
-      );
-
-      res.status(201).json({
-        success: true,
-        data: {
-          _id: user._id,
-          username: user.username,
-          token,
-          publicKey: user.publicKey
-        }
-      });
-
-    } catch (error) {
-      console.error('Registration error:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Error creating user',
-        error: process.env.NODE_ENV === 'development' ? error.message : undefined
-      });
-    }
-  },
-
-  login: async (req, res) => {
-    try {
-      console.log('Login attempt:', req.body);
-      const { username, password } = req.body;
-
-      const user = await User.findOne({ username });
-      if (!user) {
-        return res.status(401).json({
-          success: false,
-          message: 'Invalid credentials'
-        });
-      }
-
-      // Verify password with bcrypt
-      const isValid = await bcrypt.compare(password, user.password);
-      if (!isValid) {
-        return res.status(401).json({
-          success: false,
-          message: 'Invalid credentials'
-        });
-      }
-
-      user.lastActive = Date.now();
-      await user.save();
-
-      const token = jwt.sign(
-        { id: user._id },
-        process.env.JWT_SECRET,
-        { expiresIn: '24h' }
-      );
-
-      console.log('Login successful:', username);
-
-      res.json({
-        success: true,
-        data: {
-          _id: user._id,
-          username: user.username,
-          token,
-          publicKey: user.publicKey
-        }
-      });
-
-    } catch (error) {
-      console.error('Login error:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Login failed',
-        error: process.env.NODE_ENV === 'development' ? error.message : undefined
-      });
-    }
+    return {
+      dhPrivateKey: ecdh.getPrivateKey('base64'),
+      dhPublicKey: ecdh.getPublicKey('base64', 'compressed')
+    };
+  } catch (error) {
+    console.error('Key generation error:', error);
+    throw error;
   }
 };
 
-module.exports = authController;
+const register = async (req, res) => {
+  try {
+    const { username, password } = req.body;
+
+    const existingUser = await User.findOne({ username });
+    if (existingUser) {
+      return res.status(400).json({
+        success: false,
+        message: 'Username already exists'
+      });
+    }
+
+    const { dhPrivateKey, dhPublicKey } = generateDHKeys();
+    const hashedPassword = await bcrypt.hash(password, 12);
+
+    const user = await User.create({
+      username,
+      password: hashedPassword,
+      dhPrivateKey,
+      dhPublicKey,
+      isOnline: true
+    });
+
+    const token = jwt.sign(
+      { id: user._id },
+      process.env.JWT_SECRET,
+      { expiresIn: '24h' }
+    );
+
+    res.status(201).json({
+      success: true,
+      data: {
+        _id: user._id,
+        username: user.username,
+        token,
+        dhPrivateKey,
+        dhPublicKey
+      }
+    });
+
+  } catch (error) {
+    console.error('Registration error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Registration failed'
+    });
+  }
+};
+
+const login = async (req, res) => {
+  try {
+    const { username, password } = req.body;
+
+    const user = await User.findOne({ username })
+      .select('+password +dhPrivateKey');
+
+    if (!user || !(await bcrypt.compare(password, user.password))) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid credentials'
+      });
+    }
+
+    const token = jwt.sign(
+      { id: user._id },
+      process.env.JWT_SECRET,
+      { expiresIn: '24h' }
+    );
+
+    await User.findByIdAndUpdate(user._id, {
+      isOnline: true,
+      lastActive: new Date()
+    });
+
+    res.json({
+      success: true,
+      data: {
+        _id: user._id,
+        username: user.username,
+        token,
+        dhPrivateKey: user.dhPrivateKey,
+        dhPublicKey: user.dhPublicKey
+      }
+    });
+
+  } catch (error) {
+    console.error('Login error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Login failed'
+    });
+  }
+};
+
+const verify = async (req, res) => {
+  try {
+    res.json({
+      success: true,
+      data: {
+        user: {
+          _id: req.user._id,
+          username: req.user.username,
+          dhPublicKey: req.user.dhPublicKey
+        }
+      }
+    });
+  } catch (error) {
+    res.status(401).json({
+      success: false,
+      message: 'Verification failed'
+    });
+  }
+};
+
+const logout = async (req, res) => {
+  try {
+    const userId = req.user._id;
+    
+    await User.findByIdAndUpdate(userId, {
+      isOnline: false,
+      lastActive: new Date()
+    });
+
+    res.json({
+      success: true,
+      message: 'Logged out successfully'
+    });
+  } catch (error) {
+    console.error('Logout error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Logout failed'
+    });
+  }
+};
+
+module.exports = {
+  register,
+  login,
+  verify,
+  logout
+};

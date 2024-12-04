@@ -6,24 +6,21 @@ exports.protect = async (req, res, next) => {
   try {
     let token;
 
-    // Check for token in headers
-    if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
+    if (req.headers.authorization?.startsWith('Bearer')) {
       token = req.headers.authorization.split(' ')[1];
     }
 
     if (!token) {
       return res.status(401).json({
         success: false,
-        message: 'Not authorized to access this route'
+        message: 'Not authorized'
       });
     }
 
     try {
-      // Verify token
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      const user = await User.findById(decoded.id);
 
-      // Get user from database
-      const user = await User.findById(decoded.id).select('-password -salt -privateKey');
       if (!user) {
         return res.status(401).json({
           success: false,
@@ -31,24 +28,30 @@ exports.protect = async (req, res, next) => {
         });
       }
 
-      // Update last active timestamp
-      user.lastActive = Date.now();
-      await user.save();
-
-      // Add user to request object
       req.user = user;
       next();
-    } catch (err) {
+    } catch (error) {
       return res.status(401).json({
         success: false,
-        message: 'Not authorized to access this route'
+        message: 'Invalid token'
       });
     }
   } catch (error) {
     console.error('Auth middleware error:', error);
     res.status(500).json({
       success: false,
-      message: 'Authentication error'
+      message: 'Server error'
     });
   }
+};
+
+exports.wsAuth = async (token) => {
+  if (!token) throw new Error('No token provided');
+
+  const decoded = jwt.verify(token, process.env.JWT_SECRET);
+  const user = await User.findById(decoded.id);
+
+  if (!user) throw new Error('User not found');
+
+  return user;
 };

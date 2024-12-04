@@ -1,4 +1,5 @@
 // server/src/config/websocket.js
+
 const WebSocket = require('ws');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
@@ -8,6 +9,7 @@ class WebSocketServer {
   constructor(server) {
     this.wss = new WebSocket.Server({ server });
     this.clients = new Map();
+    this.heartbeatInterval = 30000; // 30 seconds
     this.initialize();
   }
 
@@ -15,116 +17,197 @@ class WebSocketServer {
     console.log('Initializing WebSocket Server');
 
     this.wss.on('connection', async (ws) => {
-      console.log('New client attempting connection');
       let userId = null;
+      console.log('New client attempting connection');
+
+      const connectionTimeout = setTimeout(() => {
+        if (!userId) {
+          console.log('Connection timeout - no authentication received');
+          ws.close(4001, 'Authentication timeout');
+        }
+      }, 10000);
+
+      ws.isAlive = true;
+      ws.on('pong', () => {
+        ws.isAlive = true;
+      });
 
       ws.on('message', async (data) => {
         try {
           const message = JSON.parse(data);
-          console.log('Received message:', message);
-
-          if (message.type === 'auth') {
-            const decoded = jwt.verify(message.token, process.env.JWT_SECRET);
-            userId = decoded.id;
-
-            const user = await User.findById(userId);
-            if (!user) {
-              ws.close();
-              return;
-            }
-
-            // Store client connection
-            this.clients.set(userId, { ws, user });
-            
-            ws.send(JSON.stringify({ 
-              type: 'auth_success',
-              user: { id: user._id, username: user.username }
-            }));
-
-            // Update user status and broadcast user list
-            await User.findByIdAndUpdate(userId, { isOnline: true });
-            await this.broadcastUserList();
-
-            return;
-          }
-
-          // For non-auth messages, verify we have a valid userId
-          if (!userId || !this.clients.has(userId)) {
-            console.log('Invalid user trying to send message');
-            return;
-          }
+          console.log('Received message type:', message.type);
 
           switch (message.type) {
+            case 'auth':
+              try {
+                clearTimeout(connectionTimeout);
+                const decoded = jwt.verify(message.token, process.env.JWT_SECRET);
+                userId = decoded.id;
+
+                const user = await User.findById(userId);
+                if (!user) {
+                  ws.close(4002, 'User not found');
+                  return;
+                }
+
+                // Update user status
+                await User.findByIdAndUpdate(userId, {
+                  isOnline: true,
+                  lastActive: new Date()
+                });
+
+                this.clients.set(userId, {
+                  ws,
+                  user: {
+                    id: user._id,
+                    username: user.username
+                  }
+                });
+
+                console.log(`User ${user.username} authenticated successfully`);
+                
+                ws.send(JSON.stringify({
+                  type: 'auth_success',
+                  user: {
+                    id: user._id,
+                    username: user.username
+                  }
+                }));
+
+                // Send message history
+                await this.sendMessageHistory(userId);
+                await this.broadcastUserList();
+              } catch (error) {
+                console.error('Authentication error:', error);
+                ws.close(4003, 'Authentication failed');
+              }
+              break;
+            
             case 'message':
+              if (!userId || !this.clients.has(userId)) {
+                ws.close(4004, 'Unauthorized');
+                return;
+              }
               await this.handleMessage(userId, message);
               break;
+
             case 'typing':
+              if (!userId || !this.clients.has(userId)) {
+                ws.close(4004, 'Unauthorized');
+                return;
+              }
               await this.handleTyping(userId, message);
               break;
           }
-
         } catch (error) {
           console.error('Message processing error:', error);
+          ws.send(JSON.stringify({
+            type: 'error',
+            error: 'Failed to process message'
+          }));
         }
       });
 
       ws.on('close', async () => {
         if (userId) {
-          console.log('Client disconnected:', userId);
+          console.log(`Client disconnected: ${userId}`);
           this.clients.delete(userId);
-          await User.findByIdAndUpdate(userId, { isOnline: false });
+          
+          await User.findByIdAndUpdate(userId, {
+            isOnline: false,
+            lastActive: new Date()
+          });
+
+          await this.broadcastUserList();
+        }
+        clearTimeout(connectionTimeout);
+      });
+
+      ws.on('error', async (error) => {
+        console.error('WebSocket error:', error);
+        if (userId) {
+          this.clients.delete(userId);
+          await User.findByIdAndUpdate(userId, {
+            isOnline: false,
+            lastActive: new Date()
+          });
           await this.broadcastUserList();
         }
       });
     });
+
+    // Heartbeat to keep connections alive
+    setInterval(() => {
+      this.wss.clients.forEach((ws) => {
+        if (ws.isAlive === false) return ws.terminate();
+        ws.isAlive = false;
+        ws.ping();
+      });
+    }, this.heartbeatInterval);
   }
 
   async handleMessage(senderId, message) {
     try {
-      console.log(`Handling message from ${senderId} to ${message.recipientId}`);
+      const { recipientId, encrypted } = message;
+      
+      if (!encrypted || !encrypted.data || !encrypted.iv) {
+        throw new Error('Missing encryption data');
+      }
       
       const messageDoc = await Message.create({
         sender: senderId,
-        recipient: message.recipientId,
-        content: message.content,
-        timestamp: new Date()
+        recipient: recipientId,
+        encrypted: {
+          data: encrypted.data,
+          iv: encrypted.iv
+        },
+        status: 'sent'
       });
 
       const messageData = {
         type: 'message',
         messageId: messageDoc._id.toString(),
-        senderId: senderId,
-        recipientId: message.recipientId,
-        content: message.content,
-        timestamp: messageDoc.timestamp
+        senderId,
+        recipientId,
+        encrypted,
+        timestamp: messageDoc.timestamp,
+        status: 'sent'
       };
 
-      // Send to recipient
-      const recipientWs = this.clients.get(message.recipientId)?.ws;
-      if (recipientWs?.readyState === WebSocket.OPEN) {
-        console.log('Sending message to recipient');
-        recipientWs.send(JSON.stringify(messageData));
+      // Send to recipient if online
+      const recipientClient = this.clients.get(recipientId);
+      if (recipientClient?.ws.readyState === WebSocket.OPEN) {
+        recipientClient.ws.send(JSON.stringify(messageData));
+        messageDoc.status = 'delivered';
+        await messageDoc.save();
+        messageData.status = 'delivered';
       }
 
-      // Confirm to sender
-      const senderWs = this.clients.get(senderId)?.ws;
-      if (senderWs?.readyState === WebSocket.OPEN) {
-        console.log('Sending confirmation to sender');
-        senderWs.send(JSON.stringify({
-          ...messageData,
-          status: 'sent'
+      // Send confirmation to sender
+      const senderClient = this.clients.get(senderId);
+      if (senderClient?.ws.readyState === WebSocket.OPEN) {
+        senderClient.ws.send(JSON.stringify({
+          type: 'message_confirmation',
+          ...messageData
         }));
       }
 
     } catch (error) {
       console.error('Error handling message:', error);
+      const senderClient = this.clients.get(senderId);
+      if (senderClient?.ws.readyState === WebSocket.OPEN) {
+        senderClient.ws.send(JSON.stringify({
+          type: 'error',
+          error: 'Failed to send message'
+        }));
+      }
     }
   }
 
   async handleTyping(senderId, message) {
-    const recipientWs = this.clients.get(message.recipientId)?.ws;
-    if (recipientWs?.readyState === WebSocket.OPEN) {
-      recipientWs.send(JSON.stringify({
+    const recipientClient = this.clients.get(message.recipientId);
+    if (recipientClient?.ws.readyState === WebSocket.OPEN) {
+      recipientClient.ws.send(JSON.stringify({
         type: 'typing',
         senderId,
         isTyping: message.isTyping
@@ -132,14 +215,40 @@ class WebSocketServer {
     }
   }
 
+  async sendMessageHistory(userId) {
+    try {
+      const messages = await Message.find({
+        $or: [
+          { sender: userId },
+          { recipient: userId }
+        ]
+      })
+      .sort({ timestamp: -1 })
+      .limit(100)
+      .lean();
+
+      const client = this.clients.get(userId);
+      if (client?.ws.readyState === WebSocket.OPEN) {
+        client.ws.send(JSON.stringify({
+          type: 'message_history',
+          messages: messages.reverse()
+        }));
+      }
+    } catch (error) {
+      console.error('Error sending message history:', error);
+    }
+  }
+
   async broadcastUserList() {
     try {
-      const users = await User.find({}).select('username isOnline').lean();
+      const users = await User.find({})
+        .select('username isOnline lastActive');
       
       const userList = users.map(user => ({
         id: user._id.toString(),
         username: user.username,
-        isOnline: this.clients.has(user._id.toString())
+        isOnline: this.clients.has(user._id.toString()),
+        lastActive: user.lastActive
       }));
 
       const message = JSON.stringify({

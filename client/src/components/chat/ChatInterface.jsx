@@ -1,12 +1,11 @@
-// src/components/chat/ChatInterface.jsx
 import { useEffect, useState, useRef, useCallback } from 'react';
 import {
-  Box, Grid, VStack, HStack, Input, Button, Text, useToast,
-  Badge
+  Box, Grid, VStack, HStack, Input, Button, Text, useToast, Badge, Spinner
 } from '@chakra-ui/react';
 import { useAuth } from '../auth/AuthContext';
 import { socketService } from '../../services/socket';
-import { useNavigate } from 'react-router-dom';
+import { encryptionService } from '../../services/encryption';
+import { api } from '../../services/api';
 
 function ChatInterface() {
   const [messages, setMessages] = useState({});
@@ -14,125 +13,180 @@ function ChatInterface() {
   const [newMessage, setNewMessage] = useState('');
   const [activeAgent, setActiveAgent] = useState(null);
   const [isConnected, setIsConnected] = useState(false);
-  const [isTyping, setIsTyping] = useState(false);
+  const [isSending, setIsSending] = useState(false);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(true);
   const messageEndRef = useRef(null);
   const typingTimeoutRef = useRef(null);
   const { user, logout } = useAuth();
   const toast = useToast();
-  const navigate = useNavigate();
-
-  const handleLogout = () => {
-    socketService.disconnect();
-    logout();
-    navigate('/login');
-  };
 
   useEffect(() => {
-    let isSubscribed = true;
+    let mounted = true;
 
     const initializeChat = async () => {
       if (!user?.token) return;
 
       try {
+        socketService.removeAllHandlers();
+        
+        socketService.on('message', handleMessage);
+        socketService.on('message_confirmation', handleMessageConfirmation);
+        socketService.on('typing', handleTyping);
+        socketService.on('user_list', handleUserList);
+        socketService.on('error', handleError);
+        socketService.on('auth_success', () => {
+          if (mounted) setIsConnected(true);
+        });
+
         await socketService.connect(user.token);
-        if (isSubscribed) {
-          setIsConnected(true);
-
-          socketService.on('user_list', (data) => {
-            if (isSubscribed && data.users) {
-              const otherUsers = data.users.filter(u => u.id !== user.id);
-              setAgents(otherUsers);
-            }
-          });
-
-          socketService.on('message', (data) => {
-            if (isSubscribed) {
-              setMessages(prev => {
-                const chatId = data.senderId === user.id ? data.recipientId : data.senderId;
-                const existingMessages = [...(prev[chatId] || [])];
-                
-                if (!existingMessages.some(msg => msg.id === data.messageId)) {
-                  existingMessages.push({
-                    id: data.messageId,
-                    content: data.content,
-                    sender: data.senderId,
-                    timestamp: new Date(data.timestamp),
-                    status: data.status || 'received',
-                  });
-                }
-
-                return {
-                  ...prev,
-                  [chatId]: existingMessages,
-                };
-              });
-            }
-          });
-
-          socketService.on('typing', (data) => {
-            if (isSubscribed && activeAgent?.id === data.senderId) {
-              setIsTyping(data.isTyping);
-              if (data.isTyping && typingTimeoutRef.current) {
-                clearTimeout(typingTimeoutRef.current);
-              }
-              typingTimeoutRef.current = setTimeout(() => {
-                if (isSubscribed) {
-                  setIsTyping(false);
-                }
-              }, 3000);
-            }
-          });
-        }
+        await fetchAllMessages();
       } catch (error) {
         console.error('Chat initialization error:', error);
-        if (isSubscribed) {
-          toast({
-            title: 'Connection Error',
-            description: 'Reconnecting to chat server...',
-            status: 'info',
-            duration: 3000,
-          });
-        }
+        handleError(error);
+      } finally {
+        if (mounted) setIsLoadingHistory(false);
       }
     };
 
     initializeChat();
 
     return () => {
-      isSubscribed = false;
-      if (typingTimeoutRef.current) {
-        clearTimeout(typingTimeoutRef.current);
-      }
+      mounted = false;
       socketService.removeAllHandlers();
     };
-  }, [user, toast, activeAgent]);
-
-  const scrollToBottom = useCallback(() => {
-    messageEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, []);
+  }, [user]);
 
   useEffect(() => {
-    scrollToBottom();
-  }, [messages, scrollToBottom]);
+    if (messageEndRef.current && activeAgent) {
+      messageEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [messages, activeAgent]);
 
-  const sendMessage = () => {
-    if (!newMessage.trim() || !activeAgent || !isConnected) return;
+  const fetchAllMessages = async () => {
+    try {
+      const response = await api.messages.getAll();
+      if (response.success) {
+        const decryptedMessages = {};
+        for (const [chatId, messages] of Object.entries(response.data)) {
+          decryptedMessages[chatId] = await Promise.all(messages.map(async (msg) => ({
+            ...msg,
+            content: await encryptionService.decryptMessage(msg.content, msg.iv)
+          })));
+        }
+        setMessages(decryptedMessages);
+      } else {
+        throw new Error('Failed to fetch messages');
+      }
+    } catch (error) {
+      console.error('Error fetching messages:', error);
+      handleError(error);
+    }
+  };
 
-    const messageId = Date.now().toString();
-    const messageContent = newMessage.trim();
+  const handleMessage = useCallback(async (data) => {
+    try {
+      let messageContent = data.content;
+      if (data.encrypted) {
+        messageContent = await encryptionService.decryptMessage(
+          data.encrypted.data,
+          data.encrypted.iv
+        );
+      }
 
-    socketService.send({
-      type: 'message',
-      messageId,
-      content: messageContent,
-      recipientId: activeAgent.id,
+      setMessages(prev => {
+        const chatId = data.senderId === user.id ? data.recipientId : data.senderId;
+        const existingMessages = [...(prev[chatId] || [])];
+        
+        if (!existingMessages.some(msg => msg.id === data.messageId)) {
+          existingMessages.push({
+            id: data.messageId,
+            content: messageContent,
+            sender: data.senderId,
+            timestamp: new Date(data.timestamp),
+            status: data.status
+          });
+        }
+
+        return {
+          ...prev,
+          [chatId]: existingMessages
+        };
+      });
+
+    } catch (error) {
+      console.error('Message processing error:', error);
+      handleError(error);
+    }
+  }, [user?.id]);
+
+  const handleMessageConfirmation = useCallback((data) => {
+    setMessages(prev => {
+      const chatId = data.recipientId;
+      const updatedMessages = [...(prev[chatId] || [])];
+      const messageIndex = updatedMessages.findIndex(msg => msg.id === data.messageId);
+      
+      if (messageIndex === -1) {
+        updatedMessages.push({
+          id: data.messageId,
+          content: data.content,
+          sender: user.id,
+          timestamp: new Date(data.timestamp),
+          status: data.status
+        });
+      } else {
+        updatedMessages[messageIndex] = {
+          ...updatedMessages[messageIndex],
+          status: data.status
+        };
+      }
+
+      return {
+        ...prev,
+        [chatId]: updatedMessages
+      };
     });
+  }, [user?.id]);
 
+  const handleUserList = useCallback((data) => {
+    if (!data.users) return;
+    
+    const otherUsers = data.users.filter(u => u.id !== user?.id);
+    setAgents(otherUsers);
+  }, [user?.id]);
+
+  const handleTyping = useCallback((data) => {
+    setAgents(prevAgents => prevAgents.map(agent => {
+      if (agent.id === data.senderId) {
+        return { ...agent, isTyping: data.isTyping };
+      }
+      return agent;
+    }));
+  }, []);
+
+  const handleError = useCallback((error) => {
+    toast({
+      title: 'Error',
+      description: error.message || 'Something went wrong',
+      status: 'error',
+      duration: 3000,
+      isClosable: true
+    });
+  }, [toast]);
+
+  const sendMessage = async () => {
+    if (!newMessage.trim() || !activeAgent || !isConnected || isSending) return;
+
+    setIsSending(true);
+    const messageContent = newMessage.trim();
     setNewMessage('');
 
-    if (typingTimeoutRef.current) {
-      clearTimeout(typingTimeoutRef.current);
-      sendTypingStatus(false);
+    try {
+      await socketService.sendMessage(activeAgent.id, messageContent);
+    } catch (error) {
+      console.error('Failed to send message:', error);
+      handleError(error);
+    } finally {
+      setIsSending(false);
     }
   };
 
@@ -142,37 +196,102 @@ function ChatInterface() {
       if (typingTimeoutRef.current) {
         clearTimeout(typingTimeoutRef.current);
       }
-      sendTypingStatus(true);
+
+      socketService.send({
+        type: 'typing',
+        recipientId: activeAgent.id,
+        isTyping: true
+      });
+
       typingTimeoutRef.current = setTimeout(() => {
-        sendTypingStatus(false);
+        socketService.send({
+          type: 'typing',
+          recipientId: activeAgent.id,
+          isTyping: false
+        });
       }, 1000);
     }
   };
 
-  const sendTypingStatus = (isTyping) => {
-    if (activeAgent && isConnected) {
-      socketService.send({
-        type: 'typing',
-        recipientId: activeAgent.id,
-        isTyping,
-      });
+  const handleLogout = async () => {
+    try {
+      await socketService.disconnect();
+      await logout();
+    } catch (error) {
+      console.error('Logout error:', error);
+      logout();
     }
   };
 
   const selectAgent = (agent) => {
     setActiveAgent(agent);
-    setIsTyping(false);
     if (typingTimeoutRef.current) {
       clearTimeout(typingTimeoutRef.current);
-      sendTypingStatus(false);
+      if (activeAgent) {
+        socketService.send({
+          type: 'typing',
+          recipientId: activeAgent.id,
+          isTyping: false
+        });
+      }
     }
   };
 
+  if (isLoadingHistory) {
+    return (
+      <Box 
+        bg="black" 
+        h="100vh" 
+        w="100vw" 
+        display="flex" 
+        alignItems="center" 
+        justifyContent="center"
+      >
+        <Spinner size="xl" color="red.500" thickness="4px" />
+      </Box>
+    );
+  }
+
+  const renderMessage = (msg) => (
+    <Box
+      key={msg.id}
+      alignSelf={msg.sender === user.id ? 'flex-end' : 'flex-start'}
+      maxW="70%"
+      mb={4}
+    >
+      <Box
+        bg={msg.sender === user.id ? 'red.600' : 'gray.700'}
+        color="white"
+        p={3}
+        borderRadius="lg"
+      >
+        <Text>{msg.content}</Text>
+        <HStack justify="flex-end" spacing={2} mt={1}>
+          <Text fontSize="xs" color="whiteAlpha.700">
+            {new Date(msg.timestamp).toLocaleTimeString()}
+          </Text>
+          {msg.sender === user.id && (
+            <Badge
+              colorScheme={
+                msg.status === 'delivered' ? 'green' :
+                msg.status === 'sent' ? 'blue' :
+                msg.status === 'sending' ? 'yellow' :
+                'red'
+              }
+              fontSize="xs"
+            >
+              {msg.status}
+            </Badge>
+          )}
+        </HStack>
+      </Box>
+    </Box>
+  );
+
   return (
-    <Box bg="black" minH="100vh">
-      <Grid templateColumns="250px 1fr" h="100vh">
-        {/* Sidebar */}
-        <Box borderRight="1px" borderColor="red.500" bg="black">
+    <Box bg="black" h="100vh" w="100vw" overflow="hidden">
+      <Grid templateColumns="250px 1fr" h="100%" maxH="100vh" w="100%">
+        <Box borderRight="1px" borderColor="red.500" bg="black" overflowY="auto">
           <VStack h="full" p={4} spacing={4} align="stretch">
             <HStack justify="space-between" mb={2}>
               <Text color="red.500" fontWeight="bold">
@@ -188,10 +307,6 @@ function ChatInterface() {
                 LOGOUT
               </Button>
             </HStack>
-
-            <Text color="red.400" fontSize="xs" textAlign="center">
-              [AES-256 + RSA-2048 ENCRYPTION ACTIVE]
-            </Text>
 
             {agents.map((agent) => (
               <Box
@@ -226,8 +341,7 @@ function ChatInterface() {
           </VStack>
         </Box>
 
-        {/* Chat Area */}
-        <Box bg="black" display="flex" flexDirection="column">
+        <Box bg="black" display="flex" flexDirection="column" h="100%">
           {activeAgent ? (
             <>
               <HStack
@@ -235,15 +349,23 @@ function ChatInterface() {
                 bg="rgba(255, 0, 0, 0.1)"
                 borderBottom="1px"
                 borderColor="red.500"
+                justify="space-between"
               >
-                <Text color="white">{activeAgent.username}</Text>
-                <Badge
-                  colorScheme={activeAgent.isOnline ? 'green' : 'gray'}
-                  variant="solid"
-                  fontSize="xs"
-                >
-                  {activeAgent.isOnline ? 'Online' : 'Offline'}
-                </Badge>
+                <HStack>
+                  <Text color="white">{activeAgent.username}</Text>
+                  <Badge
+                    colorScheme={activeAgent.isOnline ? 'green' : 'gray'}
+                    variant="solid"
+                    fontSize="xs"
+                  >
+                    {activeAgent.isOnline ? 'Online' : 'Offline'}
+                  </Badge>
+                </HStack>
+                {!isConnected && (
+                  <Badge colorScheme="red" variant="solid">
+                    Disconnected
+                  </Badge>
+                )}
               </HStack>
 
               <Box
@@ -263,40 +385,14 @@ function ChatInterface() {
                   },
                 }}
               >
-                <VStack spacing={4} align="stretch">
-                  {messages[activeAgent.id]?.map((msg) => (
-                    <Box
-                      key={msg.id}
-                      alignSelf={msg.sender === user.id ? 'flex-end' : 'flex-start'}
-                      maxW="70%"
-                    >
-                      <Box
-                        bg={msg.sender === user.id ? 'red.600' : 'gray.700'}
-                        color="white"
-                        p={3}
-                        borderRadius="lg"
-                      >
-                        <Text>{msg.content}</Text>
-                        <Text
-                          fontSize="xs"
-                          color="whiteAlpha.700"
-                          mt={1}
-                          textAlign="right"
-                        >
-                          {new Date(msg.timestamp).toLocaleTimeString([], {
-                            hour: '2-digit',
-                            minute: '2-digit',
-                          })}
-                        </Text>
-                      </Box>
-                    </Box>
-                  ))}
+                <VStack spacing={0} align="stretch">
+                  {messages[activeAgent.id]?.map(renderMessage)}
                   <div ref={messageEndRef} />
                 </VStack>
               </Box>
 
               <Box p={4} borderTop="1px" borderColor="red.500">
-                {isTyping && (
+                {activeAgent && agents.find(a => a.id === activeAgent.id)?.isTyping && (
                   <Text color="red.300" fontSize="sm" mb={2}>
                     {activeAgent.username} is typing...
                   </Text>
@@ -312,12 +408,15 @@ function ChatInterface() {
                     borderColor="red.500"
                     _hover={{ borderColor: 'red.400' }}
                     color="white"
+                    disabled={!isConnected}
                   />
                   <Button
                     onClick={sendMessage}
                     bg="red.500"
                     _hover={{ bg: 'red.600' }}
+                    isLoading={isSending}
                     isDisabled={!isConnected || !newMessage.trim()}
+                    color="white"
                   >
                     Send
                   </Button>

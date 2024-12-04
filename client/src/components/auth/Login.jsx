@@ -1,7 +1,13 @@
-// src/components/auth/Login.jsx
+// client/src/components/auth/Login.jsx
 import {
-  Box, Container, VStack, Input, Button, Heading, Text, useToast,
-  Alert, AlertIcon, AlertTitle, AlertDescription
+  Box,
+  Container,
+  VStack,
+  Input,
+  Button,
+  Heading,
+  Text,
+  useToast
 } from '@chakra-ui/react';
 import { useState } from 'react';
 import { useAuth } from './AuthContext';
@@ -9,7 +15,7 @@ import { Link } from 'react-router-dom';
 import { api } from '../../services/api';
 
 function Login() {
-  const [credentials, setCredentials] = useState({ agentId: '', password: '' });
+  const [credentials, setCredentials] = useState({ username: '', password: '' });
   const [isLoading, setIsLoading] = useState(false);
   const { login } = useAuth();
   const toast = useToast();
@@ -17,48 +23,35 @@ function Login() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setIsLoading(true);
+    
     try {
-      console.log('Attempting login with Agent ID:', credentials.agentId);
-      
-      // Call the API service for authentication
-      const response = await api.auth.login(
-        credentials.agentId,
+      const { success, data } = await api.auth.login(
+        credentials.username, 
         credentials.password
       );
-
-      console.log('API Login Response:', response);
-
-      // Check if response has the expected structure
-      if (!response.success || !response.data) {
-        throw new Error('Invalid response structure from server');
+      
+      if (!success || !data) {
+        throw new Error('Invalid server response');
       }
 
-      const { _id, username, token, publicKey } = response.data;
-
-      if (!_id || !token) {
-        throw new Error('Missing required data from server');
-      }
-
-      // Format user data for login
       const userData = {
-        id: _id,
-        username: username,
-        token: token,
-        publicKey: publicKey
+        id: data._id,
+        username: data.username,
+        token: data.token,
+        dhPrivateKey: data.dhPrivateKey,
+        dhPublicKey: data.dhPublicKey
       };
 
-      // Log in with formatted user data
-      login(userData);
-      
+      await login(userData);
+
       toast({
         title: 'Login Successful',
-        description: `Welcome back, ${username}!`,
+        description: `Welcome back, ${userData.username}!`,
         status: 'success',
         duration: 3000,
       });
-
     } catch (error) {
-      console.error('Login Error:', error);
+      console.error('Login failed:', error);
       toast({
         title: 'Access Denied',
         description: error.message || 'Invalid credentials',
@@ -71,7 +64,7 @@ function Login() {
   };
 
   return (
-    <Box bg="black" minH="100vh" py={10}>
+    <Box bg="black" h="100vh" w="100vw" py={10}>
       <Container maxW="container.sm">
         <VStack
           bg="rgba(20, 0, 0, 0.9)"
@@ -89,28 +82,32 @@ function Login() {
             <VStack spacing={4}>
               <Input
                 placeholder="AGENT IDENTIFIER"
-                value={credentials.agentId}
-                onChange={(e) =>
-                  setCredentials({ ...credentials, agentId: e.target.value })
-                }
+                value={credentials.username}
+                onChange={(e) => setCredentials({
+                  ...credentials,
+                  username: e.target.value
+                })}
                 bg="blackAlpha.300"
                 borderColor="red.500"
                 _hover={{ borderColor: 'red.400' }}
                 color="white"
                 required
+                minLength={3}
               />
               <Input
                 type="password"
                 placeholder="ACCESS CODE"
                 value={credentials.password}
-                onChange={(e) =>
-                  setCredentials({ ...credentials, password: e.target.value })
-                }
+                onChange={(e) => setCredentials({
+                  ...credentials,
+                  password: e.target.value
+                })}
                 bg="blackAlpha.300"
                 borderColor="red.500"
                 _hover={{ borderColor: 'red.400' }}
                 color="white"
                 required
+                minLength={6}
               />
               <Button
                 type="submit"
@@ -119,6 +116,7 @@ function Login() {
                 _hover={{ bg: 'red.600' }}
                 color="white"
                 isLoading={isLoading}
+                disabled={!credentials.username || !credentials.password}
               >
                 SECURE LOGIN
               </Button>
@@ -132,7 +130,7 @@ function Login() {
           </Link>
 
           <Text color="red.400" fontSize="xs">
-            [AES-256 + RSA-2048 ENCRYPTION ACTIVE]
+            [SECURE ENCRYPTION ACTIVE]
           </Text>
         </VStack>
       </Container>

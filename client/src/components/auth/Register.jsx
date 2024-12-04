@@ -1,5 +1,4 @@
-// src/components/auth/Register.jsx
-import { checkPasswordStrength } from '../../services/passwordCheck';
+// client/src/components/auth/Register.jsx
 import {
   Box,
   Container,
@@ -19,11 +18,10 @@ import { api } from '../../services/api';
 
 function Register() {
   const [formData, setFormData] = useState({
-    agentId: '',
+    username: '',
     password: '',
     confirmPassword: '',
   });
-
   const [isLoading, setIsLoading] = useState(false);
   const [errors, setErrors] = useState({});
   const navigate = useNavigate();
@@ -31,11 +29,8 @@ function Register() {
 
   const validateForm = () => {
     const newErrors = {};
-    if (!checkPasswordStrength(formData.password).isStrong) {
-      newErrors.password = 'Password must contain uppercase, lowercase, number, special character and be at least 8 characters';
-    }
-    if (formData.agentId.length < 3) {
-      newErrors.agentId = 'Agent ID must be at least 3 characters';
+    if (formData.username.length < 3) {
+      newErrors.username = 'Username must be at least 3 characters';
     }
     if (formData.password.length < 6) {
       newErrors.password = 'Password must be at least 6 characters';
@@ -49,33 +44,44 @@ function Register() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (validateForm()) {
-      setIsLoading(true);
-      try {
-        await api.auth.register(formData.agentId, formData.password);
-        
-        toast({
-          title: 'Registration Successful',
-          description: 'You can now login with your credentials',
-          status: 'success',
-          duration: 3000,
-        });
-        navigate('/login');
-      } catch (error) {
-        toast({
-          title: 'Registration Failed',
-          description: error.message || 'Something went wrong',
-          status: 'error',
-          duration: 3000,
-        });
-      } finally {
-        setIsLoading(false);
+    if (!validateForm()) return;
+    
+    setIsLoading(true);
+    try {
+      const { success, data } = await api.auth.register(
+        formData.username,
+        formData.password
+      );
+
+      if (!success || !data) {
+        throw new Error('Registration failed');
       }
+
+      toast({
+        title: 'Registration Successful',
+        description: 'You can now login with your credentials',
+        status: 'success',
+        duration: 3000,
+        isClosable: true
+      });
+
+      navigate('/login');
+    } catch (error) {
+      console.error('Registration failed:', error);
+      toast({
+        title: 'Registration Failed',
+        description: error.message || 'Something went wrong',
+        status: 'error',
+        duration: 3000,
+        isClosable: true
+      });
+    } finally {
+      setIsLoading(false);
     }
   };
 
   return (
-    <Box bg="black" minH="100vh" py={10}>
+    <Box bg="black" h="100vh" w="100vw" py={10}>
       <Container maxW="container.sm">
         <VStack
           bg="rgba(20, 0, 0, 0.9)"
@@ -93,19 +99,20 @@ function Register() {
 
           <form onSubmit={handleSubmit} style={{ width: '100%' }}>
             <VStack spacing={4}>
-              <FormControl isInvalid={errors.agentId}>
+              <FormControl isInvalid={errors.username}>
                 <FormLabel color="red.300">AGENT IDENTIFIER</FormLabel>
                 <Input
-                  value={formData.agentId}
-                  onChange={(e) =>
-                    setFormData({ ...formData, agentId: e.target.value })
-                  }
+                  value={formData.username}
+                  onChange={(e) => setFormData({
+                    ...formData,
+                    username: e.target.value
+                  })}
                   bg="blackAlpha.300"
                   borderColor="red.500"
                   _hover={{ borderColor: 'red.400' }}
                   color="white"
                 />
-                <FormErrorMessage>{errors.agentId}</FormErrorMessage>
+                <FormErrorMessage>{errors.username}</FormErrorMessage>
               </FormControl>
 
               <FormControl isInvalid={errors.password}>
@@ -113,9 +120,10 @@ function Register() {
                 <Input
                   type="password"
                   value={formData.password}
-                  onChange={(e) =>
-                    setFormData({ ...formData, password: e.target.value })
-                  }
+                  onChange={(e) => setFormData({
+                    ...formData,
+                    password: e.target.value
+                  })}
                   bg="blackAlpha.300"
                   borderColor="red.500"
                   _hover={{ borderColor: 'red.400' }}
@@ -129,9 +137,10 @@ function Register() {
                 <Input
                   type="password"
                   value={formData.confirmPassword}
-                  onChange={(e) =>
-                    setFormData({ ...formData, confirmPassword: e.target.value })
-                  }
+                  onChange={(e) => setFormData({
+                    ...formData,
+                    confirmPassword: e.target.value
+                  })}
                   bg="blackAlpha.300"
                   borderColor="red.500"
                   _hover={{ borderColor: 'red.400' }}
@@ -161,7 +170,7 @@ function Register() {
           </Link>
 
           <Text color="red.400" fontSize="xs">
-            [ENCRYPTION ACTIVE]
+            [SECURE ENCRYPTION ACTIVE]
           </Text>
         </VStack>
       </Container>

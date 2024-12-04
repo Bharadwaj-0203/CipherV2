@@ -1,11 +1,10 @@
-// src/services/socket.js
+import { encryptionService } from './encryption';
+
 class SocketService {
   constructor() {
     this.ws = null;
     this.token = null;
     this.handlers = new Map();
-    this.reconnectAttempts = 0;
-    this.maxReconnectAttempts = 5;
     this.isConnecting = false;
   }
 
@@ -14,46 +13,47 @@ class SocketService {
 
     return new Promise((resolve, reject) => {
       try {
-        this.isConnecting = true;
         this.token = token;
         this.ws = new WebSocket('ws://localhost:3000');
+        this.isConnecting = true;
 
         this.ws.onopen = () => {
           console.log('WebSocket Connected');
-          this.isConnecting = false;
-          this.reconnectAttempts = 0;
-          this.send({
-            type: 'auth',
-            token: this.token
-          });
-          resolve();
+          this.send({ type: 'auth', token });
         };
 
-        this.ws.onmessage = (event) => {
+        this.ws.onmessage = async (event) => {
           try {
             const data = JSON.parse(event.data);
-            console.log('Received:', data);
+            console.log('Received message type:', data.type);
 
-            const handlers = this.handlers.get(data.type) || [];
-            handlers.forEach(handler => handler(data));
+            if (data.type === 'auth_success') {
+              this.isConnecting = false;
+              resolve();
+            }
+
+            if (data.type === 'message' && data.encrypted) {
+              data.content = await encryptionService.decryptMessage(data.encrypted.data, data.encrypted.iv);
+            }
+
+            this.handlers.get(data.type)?.forEach(handler => handler(data));
+
           } catch (error) {
-            console.error('Error processing message:', error);
+            console.error('Message processing error:', error);
+            this.handlers.get('error')?.forEach(handler => handler(error));
           }
         };
 
         this.ws.onclose = () => {
-          console.log('WebSocket Disconnected');
           this.isConnecting = false;
-          if (!this.manualDisconnect) {
-            this.attemptReconnect();
-          }
+          console.log('WebSocket disconnected');
         };
 
         this.ws.onerror = (error) => {
-          console.error('WebSocket Error:', error);
-          this.isConnecting = false;
+          console.error('WebSocket error:', error);
           reject(error);
         };
+
       } catch (error) {
         this.isConnecting = false;
         reject(error);
@@ -61,29 +61,45 @@ class SocketService {
     });
   }
 
-  attemptReconnect() {
-    if (this.reconnectAttempts >= this.maxReconnectAttempts || !this.token) return;
-
-    this.reconnectAttempts++;
-    console.log(`Attempting to reconnect... (${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
-
-    setTimeout(() => {
-      if (!this.manualDisconnect) {
-        this.connect(this.token).catch(console.error);
+  async sendMessage(recipientId, content) {
+    try {
+      // Ensure encryption service is initialized
+      if (!encryptionService.key) {
+        await encryptionService.initialize();
       }
-    }, 2000);
+
+      const encrypted = await encryptionService.encryptMessage(content);
+      
+      this.send({
+        type: 'message',
+        recipientId,
+        encrypted
+      });
+    } catch (error) {
+      console.error('Send message error:', error);
+      throw error;
+    }
+  }
+
+  send(data) {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      throw new Error('WebSocket not connected');
+    }
+    this.ws.send(JSON.stringify(data));
   }
 
   on(type, handler) {
     if (!this.handlers.has(type)) {
-      this.handlers.set(type, []);
+      this.handlers.set(type, new Set());
     }
-    this.handlers.get(type).push(handler);
+    this.handlers.get(type).add(handler);
   }
 
-  send(data) {
-    if (this.ws?.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify(data));
+  off(type, handler) {
+    if (handler) {
+      this.handlers.get(type)?.delete(handler);
+    } else {
+      this.handlers.delete(type);
     }
   }
 
@@ -92,14 +108,11 @@ class SocketService {
   }
 
   disconnect() {
-    this.manualDisconnect = true;
-    this.removeAllHandlers();
     if (this.ws) {
       this.ws.close();
-      this.ws = null;
     }
+    this.removeAllHandlers();
     this.token = null;
-    this.reconnectAttempts = 0;
     this.isConnecting = false;
   }
 }

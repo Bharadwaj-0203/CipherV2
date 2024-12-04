@@ -1,4 +1,3 @@
-// server/src/models/Message.js
 const mongoose = require('mongoose');
 
 const messageSchema = new mongoose.Schema({
@@ -12,9 +11,15 @@ const messageSchema = new mongoose.Schema({
     ref: 'User',
     required: true
   },
-  content: {
-    type: String,
-    required: true
+  encrypted: {
+    data: {
+      type: String,
+      required: true
+    },
+    iv: {
+      type: String,
+      required: true
+    }
   },
   timestamp: {
     type: Date,
@@ -22,13 +27,11 @@ const messageSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['pending', 'sent', 'delivered', 'read'],
-    default: 'pending'
-  },
-  delivered: {
-    type: Boolean,
-    default: false
+    enum: ['sending', 'sent', 'delivered', 'read'],
+    default: 'sending'
   }
 });
+
+messageSchema.index({ sender: 1, recipient: 1, timestamp: -1 });
 
 module.exports = mongoose.model('Message', messageSchema);

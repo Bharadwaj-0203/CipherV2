@@ -1,53 +1,74 @@
-// src/services/api.js
 import axios from 'axios';
 
-const API_URL = 'http://localhost:3000/api';
-
-// Add request interceptor for debugging
-axios.interceptors.request.use(request => {
-  console.log('Starting API Request:', request.url);
-  console.log('Request Data:', request.data);
-  return request;
+const axiosInstance = axios.create({
+  baseURL: 'http://localhost:3000/api',
+  timeout: 10000,
+  headers: {
+    'Content-Type': 'application/json'
+  }
 });
 
-// Add response interceptor for debugging
-axios.interceptors.response.use(
-  response => {
-    console.log('API Response:', response.data);
-    return response.data; // Return the data directly
+axiosInstance.interceptors.request.use(
+  config => {
+    const token = localStorage.getItem('token');
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
+    return config;
   },
   error => {
-    console.error('API Error:', error.response?.data || error.message);
-    return Promise.reject(error.response?.data || error);
+    console.error('Request error:', error);
+    return Promise.reject(error);
+  }
+);
+
+axiosInstance.interceptors.response.use(
+  response => response.data,
+  error => {
+    console.error('API Error:', error.response?.data || error);
+    throw error.response?.data || error;
   }
 );
 
 export const api = {
   auth: {
-    login: async (username, password) => {
+    register: async (username, password) => {
       try {
-        console.log('Sending login request for:', username);
-        const response = await axios.post(`${API_URL}/auth/login`, {
+        console.log('Attempting registration for:', username);
+        return await axiosInstance.post('/auth/register', {
           username,
           password
         });
-        return response; // This will be the data due to the interceptor
       } catch (error) {
-        console.error('Login request failed:', error);
+        console.error('Registration failed:', error);
         throw error;
       }
     },
 
-    register: async (username, password) => {
+    login: async (username, password) => {
       try {
-        console.log('Sending registration request for:', username);
-        const response = await axios.post(`${API_URL}/auth/register`, {
+        console.log('Attempting login for:', username);
+        return await axiosInstance.post('/auth/login', {
           username,
           password
         });
-        return response; // This will be the data due to the interceptor
       } catch (error) {
-        console.error('Registration request failed:', error);
+        console.error('Login failed:', error);
+        throw error;
+      }
+    },
+
+    verify: async () => {
+      return await axiosInstance.get('/auth/verify');
+    }
+  },
+
+  messages: {
+    getAll: async () => {
+      try {
+        return await axiosInstance.get('/messages/all');
+      } catch (error) {
+        console.error('Failed to fetch messages:', error);
         throw error;
       }
     }
