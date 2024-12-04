@@ -1,3 +1,4 @@
+//src/controllers/messageControoler.js
 const Message = require('../models/Message');
 
 exports.getAllMessages = async (req, res) => {
